@@ -74,3 +74,41 @@ def check_sample_ratio_mismatch(control_n, treatment_n, expected_split=0.5, alph
     )
     srm_detected = p_value < alpha
     return srm_detected, chi2, p_value
+
+
+def cohens_h(p1, p2):
+    """Cohen's h effect size for difference between two proportions."""
+    return 2 * np.arcsin(np.sqrt(p1)) - 2 * np.arcsin(np.sqrt(p2))
+
+
+def bonferroni_correct(p_values, alpha=0.05):
+    """
+    Bonferroni correction for multiple comparisons.
+    Returns adjusted alpha and array of booleans (True = reject H0).
+    """
+    p_values = np.array(p_values)
+    adjusted_alpha = alpha / len(p_values)
+    rejected = p_values < adjusted_alpha
+    return adjusted_alpha, rejected, p_values * len(p_values)
+
+
+def benjamini_hochberg(p_values, alpha=0.05):
+    """
+    Benjamini-Hochberg FDR correction.
+    Returns array of booleans (True = reject H0) and adjusted p-values.
+    """
+    p_values = np.array(p_values)
+    n = len(p_values)
+    order = np.argsort(p_values)
+    ranks = np.arange(1, n + 1)
+
+    adjusted = np.empty(n)
+    adjusted[order] = p_values[order] * n / ranks
+
+    # Enforce monotonicity: adjusted p-values must be non-decreasing from right
+    for i in range(n - 2, -1, -1):
+        adjusted[order[i]] = min(adjusted[order[i]], adjusted[order[i + 1]])
+
+    adjusted = np.minimum(adjusted, 1.0)
+    rejected = adjusted < alpha
+    return rejected, adjusted

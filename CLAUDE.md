@@ -67,9 +67,9 @@ jupyter lab
 ## Status
 
 - [x] 01 Experiment Design
-- [ ] 02 Data Validation
-- [ ] 03 Statistical Analysis
-- [ ] 04 Practical Significance
-- [ ] 05 Segment Analysis
-- [ ] 06 Multiple Testing
-- [ ] 07 Business Impact
+- [x] 02 Data Validation
+- [x] 03 Statistical Analysis
+- [x] 04 Practical Significance
+- [x] 05 Segment Analysis
+- [x] 06 Multiple Testing
+- [x] 07 Business Impact
