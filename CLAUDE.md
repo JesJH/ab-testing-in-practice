@@ -10,8 +10,8 @@ Showcase the full A/B testing lifecycle using real public datasets, with emphasi
 
 **Primary: Landing Page Conversion (Kaggle)**
 - ~300k users, binary outcome (converted / not converted)
-- Download from: https://www.kaggle.com/datasets/zhanaarstanova/ab-testing
-- Place at: `data/ab_data.csv`
+- Place at: `data/AB Testing Data.csv`
+- Columns: user_id, timestamp, group, landing_page, converted, age, gender, location, session_duration, pages_visited, device_type, purchase_amount
 
 **Secondary: Cookie Cats Mobile Game (Kaggle)**
 - ~90k users, Day-1 and Day-7 retention metrics
