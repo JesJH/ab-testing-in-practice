@@ -73,3 +73,5 @@ jupyter lab
 - [x] 05 Segment Analysis
 - [x] 06 Multiple Testing
 - [x] 07 Business Impact
+- [x] 08 Industry-Grade Methods (CUPED, Delta Method, Sequential Testing)
+- [x] 09 Advanced Experiment Designs (Switchback, Interleaving, Network Randomization)

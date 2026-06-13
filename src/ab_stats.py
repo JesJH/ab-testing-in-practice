@@ -92,6 +92,54 @@ def bonferroni_correct(p_values, alpha=0.05):
     return adjusted_alpha, rejected, p_values * len(p_values)
 
 
+def cuped_adjust(y, x):
+    """
+    CUPED variance reduction (Deng et al. 2013).
+    Adjusts outcome y using pre-experiment covariate x.
+    Returns (y_adjusted, theta, variance_reduction_pct).
+    theta = Cov(Y, X) / Var(X) — the optimal linear coefficient.
+    """
+    theta = np.cov(y, x)[0, 1] / np.var(x)
+    y_adj = y - theta * (x - np.mean(x))
+    var_reduction = (1 - np.var(y_adj) / np.var(y)) * 100
+    return y_adj, theta, var_reduction
+
+
+def delta_method_ratio_test(y_c, x_c, y_t, x_t, alpha=0.05):
+    """
+    Two-sample test for difference in ratio metric R = mean(Y) / mean(X).
+    Uses the delta method to correctly estimate variance of a ratio.
+    Returns (R_c, R_t, diff, se_diff, z, p_value, ci_lo, ci_hi).
+    """
+    n_c, n_t = len(y_c), len(y_t)
+
+    R_c = np.mean(y_c) / np.mean(x_c)
+    R_t = np.mean(y_t) / np.mean(x_t)
+
+    def ratio_var(y, x, R, n):
+        mu_x = np.mean(x)
+        cov = np.cov(y, x, ddof=1)[0, 1]
+        return (np.var(y, ddof=1) / mu_x**2
+                - 2 * R * cov / mu_x**2
+                + R**2 * np.var(x, ddof=1) / mu_x**2) / n
+
+    se_diff = np.sqrt(ratio_var(y_c, x_c, R_c, n_c) + ratio_var(y_t, x_t, R_t, n_t))
+    z = (R_t - R_c) / se_diff
+    p = 2 * (1 - stats.norm.cdf(abs(z)))
+    z_crit = stats.norm.ppf(1 - alpha / 2)
+    diff = R_t - R_c
+    return R_c, R_t, diff, se_diff, z, p, diff - z_crit * se_diff, diff + z_crit * se_diff
+
+
+def obrien_fleming_boundary(t, alpha=0.05):
+    """
+    O'Brien-Fleming alpha-spending boundary at information fraction t (0 < t <= 1).
+    Returns the critical z-value — reject H0 if |z_observed| > this value.
+    More conservative early in the experiment, converges to z_alpha/2 at t=1.
+    """
+    return stats.norm.ppf(1 - alpha / 2) / np.sqrt(t)
+
+
 def benjamini_hochberg(p_values, alpha=0.05):
     """
     Benjamini-Hochberg FDR correction.
