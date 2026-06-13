@@ -20,11 +20,12 @@ Cover the full experimentation lifecycle — from experiment design through stat
 ## Repo Structure
 
 ```
-ab-testing-in-practice/
+ab-testing-deepdive/
 ├── CLAUDE.md                              # This file
 ├── README.md                              # Public-facing overview
-├── METHODS.md                             # Decision guide: situation → method → notebook
 ├── requirements.txt                       # Python dependencies
+├── docs/
+│   └── METHODS.md                         # Decision guide: situation → method → notebook
 ├── data/                                  # Raw data (gitignored)
 ├── notebooks/
 │   ├── 01_experiment_design.ipynb         # Hypothesis, MDE, sample size, duration
@@ -52,7 +53,7 @@ ab-testing-in-practice/
 
 **Sampling** (notebook 02): how to draw samples and assign groups — covered before data collection.
 
-See [METHODS.md](METHODS.md) for a full decision guide.
+See [docs/METHODS.md](docs/METHODS.md) for a full decision guide.
 
 ## Setup
 
