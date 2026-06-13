@@ -36,12 +36,434 @@ def notebook(cells):
 
 
 # ---------------------------------------------------------------------------
-# NOTEBOOK 02 — Data Validation
+# NOTEBOOK 02 — Sampling & Randomization Methods
 # ---------------------------------------------------------------------------
 
 NB02 = notebook([
     md(
-        '# 02 — Data Validation',
+        '# 02 — Sampling & Randomization Methods',
+        '',
+        'Between forming a hypothesis and collecting data sits a critical design question:',
+        '**how do you draw your sample and assign users to groups?**',
+        '',
+        'Getting this wrong contaminates every downstream analysis — no statistical test',
+        'can fix a broken sampling or assignment procedure.',
+        '',
+        'This notebook covers:',
+        '',
+        '1. **Simple random sampling** — the baseline and its limitations',
+        '2. **Stratified randomization** — guarantee balance on key dimensions at design time',
+        '3. **Hash-based assignment** — how companies implement randomization at scale',
+        '4. **Bootstrapping** — CIs on any metric without distributional assumptions',
+        '5. **Multi-armed bandits** — adaptive sampling as an alternative to fixed A/B',
+    ),
+
+    code(
+        'import sys',
+        'import hashlib',
+        'import numpy as np',
+        'import pandas as pd',
+        'import matplotlib.pyplot as plt',
+        'import seaborn as sns',
+        'from scipy import stats',
+        '',
+        'sys.path.append("../src")',
+        'from ab_stats import two_proportion_ztest',
+        '',
+        'sns.set_theme(style="whitegrid", palette="muted")',
+        'plt.rcParams["figure.dpi"] = 120',
+        'np.random.seed(42)',
+        '',
+        'df = pd.read_csv("../data/ab_data_clean.csv")',
+        'print(f"Loaded: {len(df):,} rows")',
+    ),
+
+    md(
+        '## 1. Simple Random Sampling',
+        '',
+        'The baseline: assign each user to control or treatment with equal probability,',
+        'independently of any other attribute.',
+        '',
+        '**The problem:** with finite samples, pure random assignment can produce unlucky',
+        'imbalances. With 1,000 users, you might get 540 on mobile and 460 on desktop in',
+        'treatment — but only 380 mobile and 620 desktop in control. This imbalance inflates',
+        'variance and makes segment analysis unreliable.',
+        '',
+        'This is not a bug — it is expected variance of random assignment. But it is avoidable.',
+    ),
+
+    code(
+        '# Demonstrate imbalance under simple random assignment',
+        'n_sims = 1_000',
+        'n_users = 1_000',
+        'mobile_frac = 0.60   # 60% of users are mobile',
+        '',
+        'imbalances = []',
+        'for _ in range(n_sims):',
+        '    devices = np.random.choice(["mobile","desktop"], size=n_users,',
+        '                               p=[mobile_frac, 1-mobile_frac])',
+        '    treatment = np.random.binomial(1, 0.5, n_users)',
+        '    mobile_trt = (devices=="mobile")[treatment==1].mean()',
+        '    mobile_ctrl = (devices=="mobile")[treatment==0].mean()',
+        '    imbalances.append(abs(mobile_trt - mobile_ctrl))',
+        '',
+        'fig, ax = plt.subplots(figsize=(8, 3.5))',
+        'ax.hist(imbalances, bins=40, color="steelblue", alpha=0.8, edgecolor="white")',
+        'ax.axvline(np.percentile(imbalances, 95), color="tomato", linestyle="--",',
+        '           label=f"95th pct: {np.percentile(imbalances, 95):.1%} imbalance")',
+        'ax.set_xlabel("Absolute difference in mobile fraction (treatment vs control)")',
+        'ax.set_ylabel("Frequency")',
+        'ax.set_title(f"Simple random assignment: mobile imbalance over {n_sims:,} simulations (N={n_users})")',
+        'ax.legend()',
+        'plt.tight_layout()',
+        'plt.show()',
+        '',
+        'print(f"Mean imbalance:  {np.mean(imbalances):.2%}")',
+        'print(f"95th percentile: {np.percentile(imbalances, 95):.2%}")',
+        'print(f"Max imbalance:   {np.max(imbalances):.2%}")',
+    ),
+
+    md(
+        '## 2. Stratified Randomization',
+        '',
+        'Pre-define strata (device type, country, user segment) and assign independently',
+        'within each stratum. This **guarantees balance** on those dimensions regardless',
+        'of sample size.',
+        '',
+        '**Benefits:**',
+        '- Eliminates unlucky imbalances on known confounders',
+        '- Reduces variance (similar effect to CUPED, but applied at design time)',
+        '- Segment analysis is cleaner — no need to worry about compositional imbalance',
+        '',
+        '**How it works:** within each stratum, randomly assign 50% to treatment.',
+        'Users in "Mobile" stratum: 50% treatment. Users in "Desktop" stratum: 50% treatment.',
+        'The overall split is exactly 50/50 by construction.',
+    ),
+
+    code(
+        'def stratified_assign(df, strata_col, treatment_frac=0.5, seed=42):',
+        '    """Assign treatment within each stratum independently."""',
+        '    rng = np.random.default_rng(seed)',
+        '    assigned = []',
+        '    for stratum, group in df.groupby(strata_col):',
+        '        n = len(group)',
+        '        n_trt = int(round(n * treatment_frac))',
+        '        labels = np.array(["control"] * (n - n_trt) + ["treatment"] * n_trt)',
+        '        rng.shuffle(labels)',
+        '        assigned.append(pd.Series(labels, index=group.index))',
+        '    return pd.concat(assigned)',
+        '',
+        '# Compare: simple vs stratified (on device_type)',
+        'n_sims = 1_000',
+        'simple_imb, strat_imb = [], []',
+        '',
+        'sample = df[["device_type","converted"]].copy()',
+        '',
+        'for seed in range(n_sims):',
+        '    # Simple random',
+        '    rng = np.random.default_rng(seed)',
+        '    simple_assign = rng.choice(["control","treatment"], size=len(sample))',
+        '    m_trt  = (sample["device_type"]=="Mobile")[simple_assign=="treatment"].mean()',
+        '    m_ctrl = (sample["device_type"]=="Mobile")[simple_assign=="control"].mean()',
+        '    simple_imb.append(abs(m_trt - m_ctrl))',
+        '',
+        '    # Stratified',
+        '    strat_assign = stratified_assign(sample, "device_type", seed=seed)',
+        '    m_trt_s  = (sample["device_type"]=="Mobile")[strat_assign=="treatment"].mean()',
+        '    m_ctrl_s = (sample["device_type"]=="Mobile")[strat_assign=="control"].mean()',
+        '    strat_imb.append(abs(m_trt_s - m_ctrl_s))',
+        '',
+        'fig, ax = plt.subplots(figsize=(9, 4))',
+        'ax.hist(simple_imb, bins=40, alpha=0.6, color="tomato",   label="Simple random")',
+        'ax.hist(strat_imb,  bins=40, alpha=0.6, color="steelblue", label="Stratified")',
+        'ax.set_xlabel("Mobile fraction imbalance (|treatment − control|)")',
+        'ax.set_ylabel("Frequency")',
+        'ax.set_title("Stratified randomization eliminates device imbalance")',
+        'ax.legend()',
+        'plt.tight_layout()',
+        'plt.show()',
+        '',
+        'print(f"Simple random  — mean imbalance: {np.mean(simple_imb):.4%}  max: {np.max(simple_imb):.4%}")',
+        'print(f"Stratified     — mean imbalance: {np.mean(strat_imb):.4%}  max: {np.max(strat_imb):.4%}")',
+    ),
+
+    md(
+        '## 3. Hash-Based Assignment',
+        '',
+        'In a live system you cannot pre-generate a list of assignments — users arrive',
+        'continuously and you need an instant, consistent, database-free answer to',
+        '"which group is this user in?"',
+        '',
+        '**The solution:** hash the user ID + experiment ID to a bucket number.',
+        '',
+        '```python',
+        'bucket = int(hashlib.md5(f"{user_id}_{experiment_id}".encode()).hexdigest(), 16) % 100',
+        'group  = "treatment" if bucket < 50 else "control"',
+        '```',
+        '',
+        '**Properties:**',
+        '- **Deterministic:** the same user always lands in the same bucket for the same experiment',
+        '- **Independent across experiments:** adding the experiment ID means a user in treatment for',
+        '  experiment A is essentially randomly assigned for experiment B (no correlation)',
+        '- **No database lookup:** instant assignment at request time',
+        '- **Auditable:** you can reproduce any assignment at any time',
+        '',
+        '**The experiment ID is critical.** Without it, user assignment is the same across',
+        'all experiments — users in treatment for A are also more likely to be in treatment',
+        'for B, C, D. This creates interference between concurrent experiments.',
+    ),
+
+    code(
+        'def hash_assign(user_id, experiment_id, treatment_pct=50):',
+        '    """Deterministic hash-based group assignment."""',
+        '    key = f"{user_id}_{experiment_id}".encode()',
+        '    bucket = int(hashlib.md5(key).hexdigest(), 16) % 100',
+        '    return "treatment" if bucket < treatment_pct else "control"',
+        '',
+        '# Verify: distribution is uniform and independent across experiments',
+        'n_users = 100_000',
+        'user_ids = range(n_users)',
+        '',
+        'assign_exp1 = [hash_assign(u, "exp_landing_page_v1") for u in user_ids]',
+        'assign_exp2 = [hash_assign(u, "exp_checkout_flow_v3") for u in user_ids]',
+        '',
+        'exp1_trt_rate = assign_exp1.count("treatment") / n_users',
+        'exp2_trt_rate = assign_exp2.count("treatment") / n_users',
+        '',
+        '# Correlation between assignments (should be near 0)',
+        'exp1_bin = np.array([1 if a=="treatment" else 0 for a in assign_exp1])',
+        'exp2_bin = np.array([1 if a=="treatment" else 0 for a in assign_exp2])',
+        'corr = np.corrcoef(exp1_bin, exp2_bin)[0, 1]',
+        '',
+        'print(f"Experiment 1 treatment rate: {exp1_trt_rate:.4f}  (target: 0.50)")',
+        'print(f"Experiment 2 treatment rate: {exp2_trt_rate:.4f}  (target: 0.50)")',
+        'print(f"Correlation between exp1 and exp2 assignments: {corr:.4f}  (target: ~0)")',
+        'print()',
+        'print("Same user, different experiment IDs:")',
+        'for uid in [42, 1337, 99999, 7]:',
+        '    g1 = hash_assign(uid, "exp_landing_page_v1")',
+        '    g2 = hash_assign(uid, "exp_checkout_flow_v3")',
+        '    print(f"  user {uid:<6}: exp1={g1:<10}  exp2={g2}")',
+    ),
+
+    md(
+        '## 4. Bootstrapping',
+        '',
+        'The z-test and t-test assume your metric is (approximately) normally distributed.',
+        'For conversion rates with large N this is fine — the CLT applies.',
+        '',
+        'But many real metrics are highly skewed:',
+        '- Revenue per user (most users spend $0, a few spend thousands)',
+        '- Session duration (heavy right tail)',
+        '- 90th percentile load time',
+        '- Median order value',
+        '',
+        'For these, **bootstrapping** gives valid confidence intervals without any',
+        'distributional assumption. The idea: repeatedly resample your data with',
+        'replacement, compute the metric on each resample, and use the distribution',
+        'of resampled estimates as a proxy for sampling variability.',
+        '',
+        '**Algorithm:**',
+        '1. Draw N samples with replacement from your data',
+        '2. Compute the metric on this bootstrap sample',
+        '3. Repeat B times (typically 1,000–10,000)',
+        '4. The 2.5th and 97.5th percentiles of bootstrap estimates = 95% CI',
+    ),
+
+    code(
+        '# Bootstrap CI on purchase_amount (skewed revenue metric)',
+        'ctrl_rev = df[df["group"]=="control"]["purchase_amount"].values',
+        'trt_rev  = df[df["group"]=="treatment"]["purchase_amount"].values',
+        '',
+        'B = 5_000  # bootstrap replications',
+        '',
+        'def bootstrap_ci(data, stat_fn, B=5_000, alpha=0.05, seed=42):',
+        '    rng = np.random.default_rng(seed)',
+        '    estimates = [stat_fn(rng.choice(data, size=len(data), replace=True))',
+        '                 for _ in range(B)]',
+        '    lo = np.percentile(estimates, 100 * alpha / 2)',
+        '    hi = np.percentile(estimates, 100 * (1 - alpha / 2))',
+        '    return np.array(estimates), lo, hi',
+        '',
+        '# Mean revenue (parametric CI vs bootstrap CI)',
+        'ctrl_boot, ctrl_lo, ctrl_hi = bootstrap_ci(ctrl_rev, np.mean, B)',
+        'trt_boot,  trt_lo,  trt_hi  = bootstrap_ci(trt_rev,  np.mean, B)',
+        '',
+        '# Bootstrap CI on the DIFFERENCE',
+        'rng = np.random.default_rng(99)',
+        'diff_boots = [',
+        '    rng.choice(trt_rev,  len(trt_rev),  replace=True).mean() -',
+        '    rng.choice(ctrl_rev, len(ctrl_rev), replace=True).mean()',
+        '    for _ in range(B)',
+        ']',
+        'diff_lo = np.percentile(diff_boots, 2.5)',
+        'diff_hi = np.percentile(diff_boots, 97.5)',
+        '',
+        'print("Bootstrap 95% CI on mean revenue per user:")',
+        'print(f"  Control:   ${ctrl_rev.mean():.4f}  CI: [${ctrl_lo:.4f}, ${ctrl_hi:.4f}]")',
+        'print(f"  Treatment: ${trt_rev.mean():.4f}  CI: [${trt_lo:.4f}, ${trt_hi:.4f}]")',
+        'print(f"  Difference: ${trt_rev.mean()-ctrl_rev.mean():+.4f}  CI: [${diff_lo:+.4f}, ${diff_hi:+.4f}]")',
+        'contains_zero = diff_lo < 0 < diff_hi',
+        'print(f"  CI contains zero: {contains_zero}")',
+        '',
+        '# Now try median (parametric CI doesn\'t exist — bootstrap shines here)',
+        'rng2 = np.random.default_rng(77)',
+        'med_boots = [',
+        '    rng2.choice(trt_rev,  len(trt_rev),  replace=True).median() if hasattr(rng2.choice(trt_rev, len(trt_rev), replace=True), "median") else np.median(rng2.choice(trt_rev,  len(trt_rev),  replace=True)) -',
+        '    np.median(rng2.choice(ctrl_rev, len(ctrl_rev), replace=True))',
+        '    for _ in range(B)',
+        ']',
+        'print()',
+        'print(f"Bootstrap 95% CI on MEDIAN revenue difference:")',
+        'print(f"  [{np.percentile(med_boots, 2.5):+.4f}, {np.percentile(med_boots, 97.5):+.4f}]")',
+        'print("  (No parametric equivalent — bootstrap is the right tool here)")',
+    ),
+
+    code(
+        '# Visualise: skewed revenue distribution and bootstrap sampling distribution',
+        'fig, axes = plt.subplots(1, 2, figsize=(12, 4))',
+        '',
+        '# Left: raw revenue distribution',
+        'ax = axes[0]',
+        'ax.hist(ctrl_rev[ctrl_rev > 0], bins=60, color="steelblue", alpha=0.6,',
+        '        label="Control (converters only)", density=True)',
+        'ax.hist(trt_rev[trt_rev > 0],  bins=60, color="coral", alpha=0.6,',
+        '        label="Treatment (converters only)", density=True)',
+        'ax.set_xlabel("Purchase amount ($)")',
+        'ax.set_ylabel("Density")',
+        'ax.set_title("Revenue is right-skewed — CLT helps but bootstrap is safer")',
+        'ax.legend(fontsize=9)',
+        '',
+        '# Right: bootstrap distribution of the difference',
+        'ax = axes[1]',
+        'ax.hist(diff_boots, bins=60, color="steelblue", alpha=0.8, density=True)',
+        'ax.axvline(0,        color="gray",    linewidth=1.5, linestyle="--", label="No difference")',
+        'ax.axvline(diff_lo,  color="tomato",  linewidth=1.5, linestyle=":",  label=f"95% CI: [{diff_lo:+.3f}, {diff_hi:+.3f}]")',
+        'ax.axvline(diff_hi,  color="tomato",  linewidth=1.5, linestyle=":")',
+        'ax.set_xlabel("Bootstrapped difference in mean revenue ($/user)")',
+        'ax.set_title("Bootstrap sampling distribution of the treatment effect")',
+        'ax.legend(fontsize=9)',
+        '',
+        'plt.tight_layout()',
+        'plt.show()',
+    ),
+
+    md(
+        '## 5. Multi-Armed Bandits',
+        '',
+        'Standard A/B testing has a fixed exploration phase (run the experiment) followed',
+        'by a fixed exploitation phase (ship the winner). This is efficient when you have',
+        'time and the cost of running the experiment is low.',
+        '',
+        '**When A/B is expensive:** if users in the losing variant lose revenue or churn,',
+        'every user you send to the loser during the experiment is a cost. Bandits reduce',
+        'this cost by adaptively shifting traffic toward the better variant.',
+        '',
+        '### Epsilon-Greedy',
+        'With probability ε, explore (pick a random arm). With probability 1−ε, exploit',
+        '(pick the current best arm). Simple but converges slowly.',
+        '',
+        '### Thompson Sampling',
+        'Maintain a Beta(α, β) posterior for each arm\'s conversion rate. At each step,',
+        'sample from each arm\'s posterior and send the user to the arm with the highest',
+        'sample. Naturally balances exploration and exploitation — when uncertain, it',
+        'explores; when confident, it exploits.',
+        '',
+        '**The tradeoff vs fixed A/B:**',
+        '',
+        '| | Fixed A/B | Multi-Armed Bandit |',
+        '|---|---|---|',
+        '| Statistical guarantees | Strong (controlled α, power) | Weaker (regret bounds) |',
+        '| User cost during experiment | High (50% on loser) | Low (shifts to winner) |',
+        '| Detects subtle effects | Yes (with enough N) | Often misses small effects |',
+        '| Best for | Confirmatory decisions | Fast iteration, high user cost |',
+        '| Used by | Most product teams | Personalisation, content ranking |',
+    ),
+
+    code(
+        '# Simulate: Thompson Sampling vs fixed 50/50 A/B',
+        'TRUE_RATE_A = 0.10',
+        'TRUE_RATE_B = 0.14   # B is 40% better',
+        'N_ROUNDS    = 10_000',
+        '',
+        '# --- Thompson Sampling ---',
+        'alpha_a, beta_a = 1, 1   # Beta prior for arm A',
+        'alpha_b, beta_b = 1, 1   # Beta prior for arm B',
+        'ts_regret, ts_traffic_b = [], []',
+        '',
+        'rng = np.random.default_rng(42)',
+        'for t in range(1, N_ROUNDS + 1):',
+        '    sample_a = rng.beta(alpha_a, beta_a)',
+        '    sample_b = rng.beta(alpha_b, beta_b)',
+        '    if sample_b > sample_a:',
+        '        reward = rng.binomial(1, TRUE_RATE_B)',
+        '        alpha_b += reward; beta_b += (1 - reward)',
+        '        ts_traffic_b.append(1)',
+        '    else:',
+        '        reward = rng.binomial(1, TRUE_RATE_A)',
+        '        alpha_a += reward; beta_a += (1 - reward)',
+        '        ts_traffic_b.append(0)',
+        '    ts_regret.append(TRUE_RATE_B - (TRUE_RATE_B if ts_traffic_b[-1] else TRUE_RATE_A))',
+        '',
+        '# --- Fixed 50/50 A/B ---',
+        'ab_regret = []',
+        'for t in range(N_ROUNDS):',
+        '    chosen = rng.choice([0, 1])  # 50/50',
+        '    rate = TRUE_RATE_B if chosen else TRUE_RATE_A',
+        '    ab_regret.append(TRUE_RATE_B - rate)',
+        '',
+        'ts_cumregret = np.cumsum(ts_regret)',
+        'ab_cumregret = np.cumsum(ab_regret)',
+        'ts_pct_b = pd.Series(ts_traffic_b).rolling(200).mean()',
+        '',
+        'fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))',
+        '',
+        'ax1.plot(ts_cumregret, color="steelblue", label="Thompson Sampling", linewidth=2)',
+        'ax1.plot(ab_cumregret, color="tomato",    label="Fixed 50/50 A/B",   linewidth=2)',
+        'ax1.set_xlabel("Users")',
+        'ax1.set_ylabel("Cumulative regret (missed conversions)")',
+        'ax1.set_title("Cumulative regret: bandit vs fixed A/B")',
+        'ax1.legend()',
+        '',
+        'ax2.plot(ts_pct_b * 100, color="steelblue", linewidth=2)',
+        'ax2.axhline(50, color="tomato", linestyle="--", label="Fixed A/B (always 50%)")',
+        'ax2.axhline(100, color="green", linestyle=":", alpha=0.5, label="Perfect (always B)")',
+        'ax2.set_xlabel("Users")',
+        'ax2.set_ylabel("Traffic to arm B (%)")',
+        'ax2.set_title("Thompson Sampling adaptively shifts traffic to winning arm")',
+        'ax2.legend()',
+        '',
+        'plt.tight_layout()',
+        'plt.show()',
+        '',
+        'print(f"Total regret — Thompson Sampling: {ts_cumregret[-1]:.1f} missed conversions")',
+        'print(f"Total regret — Fixed A/B:          {ab_cumregret[-1]:.1f} missed conversions")',
+        'print(f"Regret reduction: {(1 - ts_cumregret[-1]/ab_cumregret[-1]):.1%}")',
+        'print(f"Thompson final traffic to B: {np.mean(ts_traffic_b[-1000:]):.1%}")',
+    ),
+
+    md(
+        '## Summary',
+        '',
+        '| Method | When to use | Key property |',
+        '|---|---|---|',
+        '| Simple random | Default, large N | Unbiased, easy |',
+        '| Stratified | Known confounders, moderate N | Guaranteed balance, lower variance |',
+        '| Hash-based | Live production systems | Deterministic, no DB, concurrent-safe |',
+        '| Bootstrapping | Skewed metrics, medians, percentiles | No distributional assumptions |',
+        '| Thompson Sampling | High user cost per loser, fast iteration | Minimises regret, weaker stat guarantees |',
+        '',
+        'Proceed to **[03 — Data Validation](03_data_validation.ipynb)**.',
+    ),
+])
+
+# ---------------------------------------------------------------------------
+# NOTEBOOK 03 — Data Validation
+# ---------------------------------------------------------------------------
+
+NB03 = notebook([
+    md(
+        '# 03 — Data Validation',
         '',
         'Before running any statistical test, we need to verify the data is trustworthy.',
         'Garbage in, garbage out — a beautiful p-value on corrupted data is meaningless.',
@@ -253,17 +675,17 @@ NB02 = notebook([
         '| Sample Ratio Mismatch | Not detected |',
         '| Conversion rate range | ~12% — plausible |',
         '',
-        'Data is clean. Proceed to **[03 — Statistical Analysis](03_statistical_analysis.ipynb)**.',
+        'Data is clean. Proceed to **[04 — Statistical Analysis](04_statistical_analysis.ipynb)**.',
     ),
 ])
 
 # ---------------------------------------------------------------------------
-# NOTEBOOK 03 — Statistical Analysis
+# NOTEBOOK 04 — Statistical Analysis
 # ---------------------------------------------------------------------------
 
-NB03 = notebook([
+NB04 = notebook([
     md(
-        '# 03 — Statistical Analysis',
+        '# 04 — Statistical Analysis',
         '',
         'With clean data in hand, we run the core statistical test.',
         '',
@@ -501,18 +923,18 @@ NB03 = notebook([
         'is small and consistent with random variation.',
         '',
         'But statistical significance alone does not tell the whole story.',
-        'Proceed to **[04 — Practical Significance](04_practical_significance.ipynb)**',
+        'Proceed to **[05 — Practical Significance](05_practical_significance.ipynb)**',
         'to understand *how big* an effect we could have detected.',
     ),
 ])
 
 # ---------------------------------------------------------------------------
-# NOTEBOOK 04 — Practical Significance
+# NOTEBOOK 05 — Practical Significance
 # ---------------------------------------------------------------------------
 
-NB04 = notebook([
+NB05 = notebook([
     md(
-        '# 04 — Practical Significance',
+        '# 05 — Practical Significance',
         '',
         '**Statistical significance** answers: "Is the effect distinguishable from zero?"',
         '**Practical significance** answers: "Is the effect large enough to matter?"',
@@ -733,17 +1155,17 @@ NB04 = notebook([
         '- **Retrospective power** explains whether a null result is informative or just underpowered',
         '- Our result: inconclusive — the experiment cannot rule out a meaningful effect',
         '',
-        'Proceed to **[05 — Segment Analysis](05_segment_analysis.ipynb)**.',
+        'Proceed to **[06 — Segment Analysis](06_segment_analysis.ipynb)**.',
     ),
 ])
 
 # ---------------------------------------------------------------------------
-# NOTEBOOK 05 — Segment Analysis
+# NOTEBOOK 06 — Segment Analysis
 # ---------------------------------------------------------------------------
 
-NB05 = notebook([
+NB06 = notebook([
     md(
-        '# 05 — Segment Analysis',
+        '# 06 — Segment Analysis',
         '',
         'Aggregate results can hide important patterns. Segment analysis asks:',
         '',
@@ -1106,17 +1528,17 @@ NB05 = notebook([
         '**Segment findings are hypothesis-generating, not hypothesis-confirming.**',
         'A surprising segment result should lead to a new, dedicated experiment for that segment.',
         '',
-        'Proceed to **[06 — Multiple Testing](06_multiple_testing.ipynb)** for correction methods.',
+        'Proceed to **[07 — Multiple Testing](07_multiple_testing.ipynb)** for correction methods.',
     ),
 ])
 
 # ---------------------------------------------------------------------------
-# NOTEBOOK 06 — Multiple Testing
+# NOTEBOOK 07 — Multiple Testing
 # ---------------------------------------------------------------------------
 
-NB06 = notebook([
+NB07 = notebook([
     md(
-        '# 06 — Multiple Testing Correction',
+        '# 07 — Multiple Testing Correction',
         '',
         'Every time we run a hypothesis test at α=0.05, we accept a 5% false positive rate.',
         'If we run **k** tests, the probability of at least one false positive grows rapidly.',
@@ -1344,17 +1766,17 @@ NB06 = notebook([
         'commit to your primary metric and planned segments *before* launch.',
         'Post-hoc findings are exploratory, not confirmatory — label them accordingly.',
         '',
-        'Proceed to **[07 — Business Impact](07_business_impact.ipynb)**.',
+        'Proceed to **[08 — Business Impact](08_business_impact.ipynb)**.',
     ),
 ])
 
 # ---------------------------------------------------------------------------
-# NOTEBOOK 07 — Business Impact
+# NOTEBOOK 08 — Business Impact
 # ---------------------------------------------------------------------------
 
-NB07 = notebook([
+NB08 = notebook([
     md(
-        '# 07 — Business Impact',
+        '# 08 — Business Impact',
         '',
         'Statistical results need to be translated into business decisions.',
         'A p-value alone cannot tell a product manager what to do.',
@@ -1657,12 +2079,12 @@ NB07 = notebook([
 ])
 
 # ---------------------------------------------------------------------------
-# NOTEBOOK 08 — Industry-Grade Methods: CUPED, Delta Method, Sequential Testing
+# NOTEBOOK 09 — Industry-Grade Methods: CUPED, Delta Method, Sequential Testing
 # ---------------------------------------------------------------------------
 
-NB08 = notebook([
+NB09 = notebook([
     md(
-        '# 08 — Industry-Grade Methods',
+        '# 09 — Industry-Grade Methods',
         '',
         'Standard z-tests and p-values get you to a correct answer — but at scale, "correct"',
         'is not enough. Big tech experimentation platforms layer on three key methods that make',
@@ -2161,18 +2583,18 @@ NB08 = notebook([
         'results that are faster, more accurate, and continuously monitorable — without',
         'sacrificing statistical validity.',
         '',
-        'Proceed to **[09 — Advanced Experiment Designs](09_advanced_designs.ipynb)**',
+        'Proceed to **[10 — Advanced Experiment Designs](10_advanced_designs.ipynb)**',
         'for methods that handle situations where standard user-level randomization breaks.',
     ),
 ])
 
 # ---------------------------------------------------------------------------
-# NOTEBOOK 09 — Advanced Experiment Designs
+# NOTEBOOK 10 — Advanced Experiment Designs
 # ---------------------------------------------------------------------------
 
-NB09 = notebook([
+NB10 = notebook([
     md(
-        '# 09 — Advanced Experiment Designs',
+        '# 10 — Advanced Experiment Designs',
         '',
         'Standard A/B testing assumes you can randomly assign individual users to groups',
         'and that their outcomes are independent. This assumption (SUTVA) breaks in three',
@@ -2641,14 +3063,15 @@ NB09 = notebook([
 # ---------------------------------------------------------------------------
 
 notebooks = {
-    '02_data_validation.ipynb':        NB02,
-    '03_statistical_analysis.ipynb':   NB03,
-    '04_practical_significance.ipynb': NB04,
-    '05_segment_analysis.ipynb':       NB05,
-    '06_multiple_testing.ipynb':       NB06,
-    '07_business_impact.ipynb':        NB07,
-    '08_industry_methods.ipynb':       NB08,
-    '09_advanced_designs.ipynb':       NB09,
+    '02_sampling_randomization.ipynb':  NB02,
+    '03_data_validation.ipynb':         NB03,
+    '04_statistical_analysis.ipynb':    NB04,
+    '05_practical_significance.ipynb':  NB05,
+    '06_segment_analysis.ipynb':        NB06,
+    '07_multiple_testing.ipynb':        NB07,
+    '08_business_impact.ipynb':         NB08,
+    '09_industry_methods.ipynb':        NB09,
+    '10_advanced_designs.ipynb':        NB10,
 }
 
 for filename, nb in notebooks.items():

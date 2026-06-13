@@ -1,53 +1,58 @@
 # A/B Testing in Practice
 
-A portfolio project demonstrating end-to-end A/B testing — from experiment design through statistical analysis to business impact quantification.
+Built for deep learning and exploration of A/B testing using real data and working implementations. Every concept is implemented in Python, compared to industry practice, and interpreted in a business context.
 
 ## Project Goal
 
-Showcase the full A/B testing lifecycle using real public datasets, with emphasis on correct statistical interpretation and translating results into business decisions.
+Cover the full experimentation lifecycle — from experiment design through statistical analysis to the advanced methods used at Meta, DoorDash, Netflix, and LinkedIn — with real datasets and reusable code.
 
 ## Datasets
 
-**Primary: Landing Page Conversion (Kaggle)**
-- ~300k users, binary outcome (converted / not converted)
+**Primary: Landing Page Conversion**
+- ~294k users, 12 columns
 - Place at: `data/AB Testing Data.csv`
 - Columns: user_id, timestamp, group, landing_page, converted, age, gender, location, session_duration, pages_visited, device_type, purchase_amount
 
 **Secondary: Cookie Cats Mobile Game (Kaggle)**
 - ~90k users, Day-1 and Day-7 retention metrics
-- Download from: https://www.kaggle.com/datasets/yufengsui/mobile-games-ab-testing
 - Place at: `data/cookie_cats.csv`
 
 ## Repo Structure
 
 ```
 ab-testing-in-practice/
-├── CLAUDE.md                         # This file
-├── README.md                         # Public-facing overview
-├── requirements.txt                  # Python dependencies
-├── data/                             # Raw data (gitignored)
+├── CLAUDE.md                              # This file
+├── README.md                              # Public-facing overview
+├── METHODS.md                             # Decision guide: situation → method → notebook
+├── requirements.txt                       # Python dependencies
+├── data/                                  # Raw data (gitignored)
 ├── notebooks/
-│   ├── 01_experiment_design.ipynb    # Hypothesis, metrics, framing
-│   ├── 02_data_validation.ipynb      # SRM checks, AA test validity
-│   ├── 03_statistical_analysis.ipynb # z-test, t-test, p-values, CIs
-│   ├── 04_practical_significance.ipynb # Effect size, MDE, lift vs. noise
-│   ├── 05_segment_analysis.ipynb     # Breakdown by device, cohort, etc.
-│   ├── 06_multiple_testing.ipynb     # Bonferroni, FDR correction
-│   └── 07_business_impact.ipynb      # Translating lift % to revenue/users
+│   ├── 01_experiment_design.ipynb         # Hypothesis, MDE, sample size, duration
+│   ├── 02_sampling_randomization.ipynb    # Stratified, hash-based, bootstrap, bandits
+│   ├── 03_data_validation.ipynb           # SRM, dedup, mismatches, baseline check
+│   ├── 04_statistical_analysis.ipynb      # z-test, p-values, CIs, null distribution
+│   ├── 05_practical_significance.ipynb    # Cohen's h, CI vs MDE, decision quadrants
+│   ├── 06_segment_analysis.ipynb          # Device/gender, novelty, Simpson's Paradox
+│   ├── 07_multiple_testing.ipynb          # Bonferroni, Holm, BH-FDR
+│   ├── 08_business_impact.ipynb           # Revenue CIs, expected value, decision template
+│   ├── 09_industry_methods.ipynb          # CUPED, delta method, sequential testing
+│   ├── 10_advanced_designs.ipynb          # Switchback, interleaving, cluster randomization
+│   └── 11_observational_methods.ipynb     # DiD, PSM, RDD, synthetic control (planned)
+├── scripts/
+│   └── generate_notebooks.py             # Generates notebooks 02-10 from Python source
 └── src/
-    └── ab_stats.py                   # Reusable stats utility functions
+    └── ab_stats.py                        # Reusable stats utility functions
 ```
 
-## Concepts Covered
+## Three Contexts
 
-1. Experiment framing (null/alternative hypothesis, primary metric)
-2. Pre-experiment checks (sample ratio mismatch, AA test)
-3. Sample size & statistical power (MDE, why underpowered tests mislead)
-4. Statistical significance (p-values, confidence intervals, choosing the right test)
-5. Practical significance (significant ≠ worth shipping)
-6. Segment analysis (does the effect hold across subgroups?)
-7. Multiple testing correction (Bonferroni, Benjamini-Hochberg FDR)
-8. Business impact quantification (lift → revenue → decision)
+**Live experiment** (notebooks 01–10): randomization is happening now. Covers design, sampling, validation, analysis, and industry-grade methods.
+
+**Historical / observational data** (notebook 11, planned): feature was already shipped. Covers causal inference methods for when you can't randomize.
+
+**Sampling** (notebook 02): how to draw samples and assign groups — covered before data collection.
+
+See [METHODS.md](METHODS.md) for a full decision guide.
 
 ## Setup
 
@@ -58,20 +63,29 @@ pip install -r requirements.txt
 jupyter lab
 ```
 
+Run notebooks 01 → 10 in order. Notebooks 03–10 depend on `data/ab_data_clean.csv` produced by notebook 03.
+
 ## Working Across Machines
 
-- Data files are gitignored — download from Kaggle links above after cloning
-- Notebooks are numbered and meant to be worked through in order
-- `src/ab_stats.py` contains shared functions imported by the notebooks
+- Data files are gitignored — place CSVs in `data/` after cloning (see dataset paths above)
+- Regenerate notebooks at any time: `python scripts/generate_notebooks.py`
+- `src/ab_stats.py` contains all shared functions imported by the notebooks
 
 ## Status
 
+### Foundations
 - [x] 01 Experiment Design
-- [x] 02 Data Validation
-- [x] 03 Statistical Analysis
-- [x] 04 Practical Significance
-- [x] 05 Segment Analysis
-- [x] 06 Multiple Testing
-- [x] 07 Business Impact
-- [x] 08 Industry-Grade Methods (CUPED, Delta Method, Sequential Testing)
-- [x] 09 Advanced Experiment Designs (Switchback, Interleaving, Network Randomization)
+- [x] 02 Sampling & Randomization
+- [x] 03 Data Validation
+- [x] 04 Statistical Analysis
+- [x] 05 Practical Significance
+- [x] 06 Segment Analysis
+- [x] 07 Multiple Testing
+- [x] 08 Business Impact
+
+### Industry-Grade Methods
+- [x] 09 Industry Methods (CUPED, Delta Method, Sequential Testing)
+- [x] 10 Advanced Designs (Switchback, Interleaving, Network Randomization)
+
+### Observational / Historical Data
+- [ ] 11 Observational Methods (DiD, PSM, RDD, Synthetic Control)
